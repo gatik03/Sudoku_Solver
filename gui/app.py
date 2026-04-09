@@ -1,12 +1,14 @@
 import sys
 from PyQt5.QtWidgets import (
-    QApplication, QMainWindow, QWidget, QGridLayout, QLineEdit
+    QApplication, QMainWindow, QWidget, QGridLayout, QLineEdit,
+    QPushButton, QVBoxLayout
 )
 from PyQt5.QtCore import Qt
-from PyQt5.QtWidgets import QPushButton, QVBoxLayout
-from logic.solver import SudokuSolver
 from PyQt5.QtGui import QIntValidator
+
+from logic.solver import SudokuSolver
 from logic.generator import SudokuGenerator
+
 
 class SudokuApp(QMainWindow):
     def __init__(self):
@@ -16,6 +18,10 @@ class SudokuApp(QMainWindow):
         self.setGeometry(100, 100, 600, 600)
 
         self.grid_cells = []
+        self.solution = None
+        self.original_puzzle = None
+        self.mistakes = 0
+        self.game_over = False
 
         self.init_ui()
 
@@ -42,7 +48,6 @@ class SudokuApp(QMainWindow):
 
             self.grid_cells.append(row_cells)
 
-        # Solve button
         # Buttons
         generate_btn = QPushButton("Generate")
         generate_btn.clicked.connect(self.generate_board)
@@ -56,32 +61,85 @@ class SudokuApp(QMainWindow):
 
         central_widget.setLayout(main_layout)
 
+    # --------------------------
+    # CORE FUNCTIONS
+    # --------------------------
+
     def get_board(self):
         board = []
-
         for row in range(9):
             current_row = []
             for col in range(9):
                 text = self.grid_cells[row][col].text()
-
-                if text == "":
-                    current_row.append(0)
-                else:
-                    current_row.append(int(text))
-
+                current_row.append(int(text) if text else 0)
             board.append(current_row)
-
         return board
+
     def set_board(self, board):
         for row in range(9):
             for col in range(9):
+                cell = self.grid_cells[row][col]
+
                 if board[row][col] != 0:
-                    self.grid_cells[row][col].setText(str(board[row][col]))
+                    cell.setText(str(board[row][col]))
                 else:
-                    self.grid_cells[row][col].clear()
+                    cell.clear()
+
+                # RESET STYLE EVERY TIME
+                cell.setStyleSheet("color: black;")
+
+    # --------------------------
+    # GENERATE GAME
+    # --------------------------
+
+    def generate_board(self):
+        gen = SudokuGenerator()
+
+        puzzle = gen.generate_full_board()
+        puzzle = gen.remove_numbers(clues=30)
+
+        self.original_puzzle = [row[:] for row in puzzle]
+
+        # Get solution
+        solver = SudokuSolver([row[:] for row in puzzle])
+        solver.solve()
+        self.solution = solver.board
+
+        self.mistakes = 0
+        self.game_over = False
+
+        self.set_board(puzzle)
+
+        for row in range(9):
+            for col in range(9):
+                cell = self.grid_cells[row][col]
+
+                if puzzle[row][col] != 0:
+                    cell.setReadOnly(True)
+                else:
+                    cell.setReadOnly(False)
+
+                    try:
+                        cell.editingFinished.disconnect()
+                    except:
+                        pass
+
+                    # FIXED SIGNAL
+                    cell.editingFinished.connect(
+                        lambda r=row, c=col: self.check_input(r, c)
+                    )
+
+        print("New Game")
+
+    # --------------------------
+    # SOLVER
+    # --------------------------
 
     def solve_board(self):
-        board = self.get_board()
+        if not self.original_puzzle:
+            return
+
+        board = [row[:] for row in self.original_puzzle]
 
         solver = SudokuSolver(board)
 
@@ -90,24 +148,61 @@ class SudokuApp(QMainWindow):
         else:
             print("No solution exists")
 
-    def generate_board(self):
-        from logic.generator import SudokuGenerator  # adjust if using core/
+    # --------------------------
+    # GAME LOGIC
+    # --------------------------
 
-        gen = SudokuGenerator()
+    def check_input(self, row, col):
+        if self.game_over or not self.solution:
+            return
 
-        full = gen.generate_full_board()
-        puzzle = gen.remove_numbers(clues=30)
+        cell = self.grid_cells[row][col]
+        text = cell.text()
 
-        self.set_board(puzzle)
+        if not text:
+            return
 
-        # Lock pre-filled cells
+        value = int(text)
+
+        # Prevent re-counting same wrong input
+        if cell.styleSheet() == "color: red;":
+            return
+
+        if value != self.solution[row][col]:
+            self.mistakes += 1
+            cell.setStyleSheet("color: red;")
+
+            print("Mistakes:", self.mistakes)
+
+            if self.mistakes >= 3:
+                print("Game Over!")
+                self.game_over = True
+
+                for r in range(9):
+                    for c in range(9):
+                        self.grid_cells[r][c].setReadOnly(True)
+
+                return
+        else:
+            cell.setStyleSheet("color: green;")
+            cell.setReadOnly(True)
+
+        self.check_win()
+
+    def check_win(self):
+        if self.game_over:
+            return
+
         for row in range(9):
             for col in range(9):
-                if puzzle[row][col] != 0:
-                    self.grid_cells[row][col].setReadOnly(True)
-                else:
-                    self.grid_cells[row][col].setReadOnly(False)
-                    self.grid_cells[row][col].clear()
+                text = self.grid_cells[row][col].text()
+                if not text or int(text) != self.solution[row][col]:
+                    return
+
+        print("You solved it!")
+
+
+
 
 def run_app():
     app = QApplication(sys.argv)
