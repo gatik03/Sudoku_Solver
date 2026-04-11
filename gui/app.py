@@ -1,7 +1,7 @@
 import sys
 from PyQt5.QtWidgets import (
     QApplication, QMainWindow, QWidget, QGridLayout, QLineEdit,
-    QPushButton, QVBoxLayout
+    QPushButton, QVBoxLayout, QLabel
 )
 from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QIntValidator
@@ -23,6 +23,10 @@ class SudokuApp(QMainWindow):
         self.mistakes = 0
         self.game_over = False
 
+        self.selected_cell = None
+        self.selected_row = None
+        self.selected_col = None
+
         self.init_ui()
 
     def init_ui(self):
@@ -31,6 +35,11 @@ class SudokuApp(QMainWindow):
 
         main_layout = QVBoxLayout()
         grid_layout = QGridLayout()
+        self.mistake_label = QLabel("Mistakes: 0/3")
+        self.mistake_label.setStyleSheet("color: white; font-size: 16px;")
+
+        main_layout.addWidget(self.mistake_label)
+
 
         # Create grid
         for row in range(9):
@@ -38,32 +47,65 @@ class SudokuApp(QMainWindow):
             for col in range(9):
                 cell = QLineEdit()
 
-                cell.setFixedSize(50, 50)
+                cell.setFixedSize(60, 60)
                 cell.setAlignment(Qt.AlignCenter)
                 cell.setMaxLength(1)
                 cell.setValidator(QIntValidator(1, 9))
+                style = ""
+
+                if col % 3 == 0:
+                    style += "border-left: 2px solid white;"
+
+                if row % 3 == 0:
+                    style += "border-top: 2px solid white;"
+
+                # Optional: right & bottom borders for outer edges
+                if col == 8:
+                    style += "border-right: 2px solid white;"
+                if row == 8:
+                    style += "border-bottom: 2px solid white;"
+
+               
+
+                cell.mousePressEvent = lambda event, r=row, c=col: self.select_cell(self.grid_cells[r][c], r, c)
+
 
                 grid_layout.addWidget(cell, row, col)
                 row_cells.append(cell)
 
             self.grid_cells.append(row_cells)
 
+
+        num_layout = QGridLayout()
+
+        for i in range(9):
+            btn = QPushButton(str(i+1))
+            btn.setFixedSize(50, 50)
+            btn.clicked.connect(lambda _, n=i+1: self.fill_selected(n))
+            num_layout.addWidget(btn, 0, i)
+      
+        main_layout.addLayout(num_layout)
+
         # Buttons
-        generate_btn = QPushButton("Generate")
-        generate_btn.clicked.connect(self.generate_board)
+        easy_btn = QPushButton("Easy")
+        medium_btn = QPushButton("Medium")
+        hard_btn = QPushButton("Hard")
+
+        easy_btn.clicked.connect(lambda: self.generate_board(40))
+        medium_btn.clicked.connect(lambda: self.generate_board(34))
+        hard_btn.clicked.connect(lambda: self.generate_board(28))
+
+        main_layout.addWidget(easy_btn)
+        main_layout.addWidget(medium_btn)
+        main_layout.addWidget(hard_btn)
 
         solve_btn = QPushButton("Solve")
         solve_btn.clicked.connect(self.solve_board)
 
         main_layout.addLayout(grid_layout)
-        main_layout.addWidget(generate_btn)
         main_layout.addWidget(solve_btn)
 
         central_widget.setLayout(main_layout)
-
-    # --------------------------
-    # CORE FUNCTIONS
-    # --------------------------
 
     def get_board(self):
         board = []
@@ -86,17 +128,54 @@ class SudokuApp(QMainWindow):
                     cell.clear()
 
                 # RESET STYLE EVERY TIME
-                cell.setStyleSheet("color: black;")
+                cell.setStyleSheet("color: white;")
 
-    # --------------------------
-    # GENERATE GAME
-    # --------------------------
+    def update_styles(self):
+        for row in range(9):
+            for col in range(9):
+                cell = self.grid_cells[row][col]
 
-    def generate_board(self):
+                style = ""
+
+                bg = "#1a1f35"
+
+                if self.selected_row is not None:
+                    if row == self.selected_row or col == self.selected_col:
+                        bg = "#2a2f4a"
+
+                    if row == self.selected_row and col == self.selected_col:
+                        bg = "#3a4170"
+
+                style += f"background-color: {bg};"
+
+                text_color = "#e0e6ff"
+
+                if cell.text():
+                    if self.solution:
+                        if int(cell.text()) == self.solution[row][col]:
+                            text_color = "#4CAF50"
+                        else:
+                            text_color = "#ff4d4d"
+
+                style += f"color: {text_color};"
+
+                style += "border: 1px solid #2a2f4a;"
+
+                if col % 3 == 0:
+                    style += "border-left: 3px solid white;"
+                if row % 3 == 0:
+                    style += "border-top: 3px solid white;"
+                if col == 8:
+                    style += "border-right: 3px solid white;"
+                if row == 8:
+                    style += "border-bottom: 3px solid white;"
+
+                cell.setStyleSheet(style)
+    def generate_board(self, clues=30):
         gen = SudokuGenerator()
 
         puzzle = gen.generate_full_board()
-        puzzle = gen.remove_numbers(clues=30)
+        puzzle = gen.remove_numbers(clues=clues)
 
         self.original_puzzle = [row[:] for row in puzzle]
 
@@ -128,12 +207,8 @@ class SudokuApp(QMainWindow):
                     cell.editingFinished.connect(
                         lambda r=row, c=col: self.check_input(r, c)
                     )
-
+        self.update_styles()
         print("New Game")
-
-    # --------------------------
-    # SOLVER
-    # --------------------------
 
     def solve_board(self):
         if not self.original_puzzle:
@@ -147,10 +222,6 @@ class SudokuApp(QMainWindow):
             self.set_board(solver.board)
         else:
             print("No solution exists")
-
-    # --------------------------
-    # GAME LOGIC
-    # --------------------------
 
     def check_input(self, row, col):
         if self.game_over or not self.solution:
@@ -172,7 +243,7 @@ class SudokuApp(QMainWindow):
             self.mistakes += 1
             cell.setStyleSheet("color: red;")
 
-            print("Mistakes:", self.mistakes)
+            self.mistake_label.setText(f"Mistakes: {self.mistakes}/3")
 
             if self.mistakes >= 3:
                 print("Game Over!")
@@ -188,6 +259,7 @@ class SudokuApp(QMainWindow):
             cell.setReadOnly(True)
 
         self.check_win()
+        self.update_styles()
 
     def check_win(self):
         if self.game_over:
@@ -201,11 +273,47 @@ class SudokuApp(QMainWindow):
 
         print("You solved it!")
 
-
-
-
+    def fill_selected(self, number):
+        if hasattr(self, "selected_cell") and self.selected_cell:
+            self.selected_cell.setText(str(number))
+    def select_cell(self, cell,row,col):
+            self.selected_cell = cell
+            self.selected_row = row
+            self.selected_col = col
+            self.update_styles()
+    
 def run_app():
     app = QApplication(sys.argv)
+    app.setStyleSheet("""
+        QMainWindow {
+            background-color: #0f1220;
+        }
+
+        QLineEdit {
+            background-color: #1a1f35;
+            color: #e0e6ff;
+            font-size: 18px;
+            border: 1px solid #2a2f4a;
+        }
+
+        QLineEdit:focus {
+            border: 2px solid #4a90ff;
+            background-color: #232a4d;
+        }
+
+        QPushButton {
+            background-color: #2a2f4a;
+            color: white;
+            font-size: 14px;
+            padding: 8px;
+            border-radius: 6px;
+        }
+
+        QPushButton:hover {
+            background-color: #3a4170;
+        }
+    """)
+
     window = SudokuApp()
     window.show()
     sys.exit(app.exec_())
