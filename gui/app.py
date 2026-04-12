@@ -16,7 +16,7 @@ class SudokuApp(QMainWindow):
 
         self.setWindowTitle("Sudoku Solver")
         self.setGeometry(100, 100, 600, 600)
-
+        self.prefilled = [[False]*9 for _ in range(9)]
         self.grid_cells = []
         self.solution = None
         self.original_puzzle = None
@@ -147,12 +147,19 @@ class SudokuApp(QMainWindow):
                         bg = "#3a4170"
 
                 style += f"background-color: {bg};"
-
                 text_color = "#e0e6ff"
 
                 if cell.text():
-                    if self.solution:
-                        if int(cell.text()) == self.solution[row][col]:
+                    try:
+                        value = int(cell.text())
+                    except:
+                        continue  # skip invalid input safely
+
+                    if self.prefilled[row][col]:
+                        text_color = "#e0e6ff"
+
+                    elif self.solution:
+                        if value == self.solution[row][col]:
                             text_color = "#4CAF50"
                         else:
                             text_color = "#ff4d4d"
@@ -192,10 +199,12 @@ class SudokuApp(QMainWindow):
         for row in range(9):
             for col in range(9):
                 cell = self.grid_cells[row][col]
-
+                    
                 if puzzle[row][col] != 0:
+                    self.prefilled[row][col] = True
                     cell.setReadOnly(True)
                 else:
+                    self.prefilled[row][col] = False
                     cell.setReadOnly(False)
 
                     try:
