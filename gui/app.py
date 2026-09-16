@@ -1,13 +1,80 @@
 import sys
 from PyQt5.QtWidgets import (
     QApplication, QMainWindow, QWidget, QGridLayout, QLineEdit,
-    QPushButton, QVBoxLayout, QLabel
+    QPushButton, QVBoxLayout, QHBoxLayout, QLabel, QFileDialog, QMessageBox, QDialog,
+    QSizePolicy
 )
 from PyQt5.QtCore import Qt
-from PyQt5.QtGui import QIntValidator
+from PyQt5.QtGui import QIntValidator, QFont
 
 from logic.solver import SudokuSolver
 from logic.generator import SudokuGenerator
+from logic.photo_importer import ImageToSudoku
+from camera_solver.pipeline import get_sudoku_from_camera
+
+
+class DetectionPreviewDialog(QDialog):
+    def __init__(self, grid, confidences, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Review Detected Numbers")
+        self.setMinimumSize(400, 500)
+        self.grid = grid
+        self.cells = []
+        self.init_ui(grid, confidences)
+
+    def init_ui(self, grid, confidences):
+        layout = QVBoxLayout(self)
+        
+        info_label = QLabel("Please verify the detected numbers. Low confidence detections are marked in red.")
+        info_label.setWordWrap(True)
+        layout.addWidget(info_label)
+
+        grid_layout = QGridLayout()
+        for r in range(9):
+            row_cells = []
+            for c in range(9):
+                cell = QLineEdit(str(grid[r][c]) if grid[r][c] != 0 else "")
+                cell.setMinimumSize(40, 40)
+                cell.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+                cell.setAlignment(Qt.AlignCenter)
+                cell.setValidator(QIntValidator(1, 9))
+                
+                # Highlight low confidence cells (now mostly for verification)
+                if grid[r][c] != 0 and confidences[r][c] < 70:
+                    cell.setStyleSheet("background-color: #ffcccc; color: black;")
+                else:
+                    cell.setStyleSheet("background-color: white; color: black;")
+                
+                grid_layout.addWidget(cell, r, c)
+                row_cells.append(cell)
+            self.cells.append(row_cells)
+        
+        # Ensure grid is relatively square
+        for i in range(9):
+            grid_layout.setRowStretch(i, 1)
+            grid_layout.setColumnStretch(i, 1)
+
+        layout.addLayout(grid_layout)
+
+        btn_box = QHBoxLayout()
+        confirm_btn = QPushButton("Confirm")
+        confirm_btn.clicked.connect(self.accept)
+        cancel_btn = QPushButton("Cancel")
+        cancel_btn.clicked.connect(self.reject)
+        btn_box.addWidget(confirm_btn)
+        btn_box.addWidget(cancel_btn)
+        layout.addLayout(btn_box)
+
+    def get_final_grid(self):
+        final_grid = []
+        for r in range(9):
+            row = []
+            for c in range(9):
+                text = self.cells[r][c].text()
+                row.append(int(text) if text else 0)
+            final_grid.append(row)
+        return final_grid
+
 
 
 class SudokuApp(QMainWindow):
@@ -39,7 +106,9 @@ class SudokuApp(QMainWindow):
         self.mistake_label.setStyleSheet("color: white; font-size: 16px;")
 
         main_layout.addWidget(self.mistake_label)
-
+        camera_btn = QPushButton("Scan Sudoku")
+        camera_btn.clicked.connect(self.load_from_camera)
+        main_layout.addWidget(camera_btn)
 
         # Create grid
         for row in range(9):
@@ -47,7 +116,8 @@ class SudokuApp(QMainWindow):
             for col in range(9):
                 cell = QLineEdit()
 
-                cell.setFixedSize(60, 60)
+                cell.setMinimumSize(50, 50)
+                cell.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
                 cell.setAlignment(Qt.AlignCenter)
                 cell.setMaxLength(1)
                 cell.setValidator(QIntValidator(1, 9))
@@ -75,6 +145,11 @@ class SudokuApp(QMainWindow):
 
             self.grid_cells.append(row_cells)
 
+        # Set stretch factors for the grid to keep cells equal
+        for i in range(9):
+            grid_layout.setRowStretch(i, 1)
+            grid_layout.setColumnStretch(i, 1)
+
 
         num_layout = QGridLayout()
 
@@ -90,14 +165,17 @@ class SudokuApp(QMainWindow):
         easy_btn = QPushButton("Easy")
         medium_btn = QPushButton("Medium")
         hard_btn = QPushButton("Hard")
+        import_btn = QPushButton("Import from Photo")
 
         easy_btn.clicked.connect(lambda: self.generate_board(40))
         medium_btn.clicked.connect(lambda: self.generate_board(34))
         hard_btn.clicked.connect(lambda: self.generate_board(28))
+        import_btn.clicked.connect(self.import_photo)
 
         main_layout.addWidget(easy_btn)
         main_layout.addWidget(medium_btn)
         main_layout.addWidget(hard_btn)
+        main_layout.addWidget(import_btn)
 
         solve_btn = QPushButton("Solve")
         solve_btn.clicked.connect(self.solve_board)
@@ -116,6 +194,89 @@ class SudokuApp(QMainWindow):
                 current_row.append(int(text) if text else 0)
             board.append(current_row)
         return board
+    def load_from_camera(self):
+        board = get_sudoku_from_camera()
+
+        if not board:
+            print("No board detected")
+            return
+
+        self.original_puzzle = [row[:] for row in board]
+
+        from logic.solver import SudokuSolver
+        solver = SudokuSolver([row[:] for row in board])
+
+        if solver.solve():
+            self.solution = solver.board
+
+        self.set_board(board)
+
+        # mark prefilled cells
+        for row in range(9):
+            for col in range(9):
+                if board[row][col] != 0:
+                    self.prefilled[row][col] = True
+                    self.grid_cells[row][col].setReadOnly(True)
+                else:
+                    self.prefilled[row][col] = False
+                    self.grid_cells[row][col].setReadOnly(False)
+
+        self.update_styles()
+
+    def import_photo(self):
+        file_path, _ = QFileDialog.getOpenFileName(
+            self, "Select Sudoku Photo", "", "Images (*.jpg *.png *.jpeg)"
+        )
+        if not file_path:
+            return
+
+        importer = ImageToSudoku()
+        try:
+            grid, confidences = importer.process_image(file_path)
+        except Exception as e:
+            QMessageBox.critical(self, "Detection Error", str(e))
+            return
+
+        dialog = DetectionPreviewDialog(grid, confidences, self)
+        if dialog.exec_() == QDialog.Accepted:
+            board = dialog.get_final_grid()
+            self.original_puzzle = [row[:] for row in board]
+            
+            # Solve to get solution and check validity
+            solver = SudokuSolver([row[:] for row in board])
+            if solver.solve():
+                self.solution = solver.board
+            else:
+                self.solution = None
+                QMessageBox.warning(self, "Puzzle Warning", "The detected puzzle may not have a solution. Please double check the numbers.")
+
+            self.set_board(board)
+            self.mistakes = 0
+            self.mistake_label.setText(f"Mistakes: {self.mistakes}/3")
+            self.game_over = False
+
+            # Mark as prefilled
+            for row in range(9):
+                for col in range(9):
+                    if board[row][col] != 0:
+                        self.prefilled[row][col] = True
+                        self.grid_cells[row][col].setReadOnly(True)
+                    else:
+                        self.prefilled[row][col] = False
+                        self.grid_cells[row][col].setReadOnly(False)
+                        
+                        # Connect checking signal
+                        try:
+                            self.grid_cells[row][col].editingFinished.disconnect()
+                        except:
+                            pass
+                        self.grid_cells[row][col].editingFinished.connect(
+                            lambda r=row, c=col: self.check_input(r, c)
+                        )
+            
+            self.update_styles()
+            QMessageBox.information(self, "Success", "Puzzle loaded successfully!")
+
 
     def set_board(self, board):
         for row in range(9):
@@ -192,6 +353,7 @@ class SudokuApp(QMainWindow):
         self.solution = solver.board
 
         self.mistakes = 0
+        self.mistake_label.setText(f"Mistakes: {self.mistakes}/3")
         self.game_over = False
 
         self.set_board(puzzle)
@@ -228,7 +390,9 @@ class SudokuApp(QMainWindow):
         solver = SudokuSolver(board)
 
         if solver.solve():
+            self.solution = solver.board # Store solution if not already present
             self.set_board(solver.board)
+            self.update_styles() # Apply green color to newly filled cells
         else:
             print("No solution exists")
 
